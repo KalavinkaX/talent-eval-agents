@@ -165,3 +165,92 @@ def test_failed_first_pass_runs_generated_queries_and_merges_results(monkeypatch
     assert result["strategy"] == "multi_query"
     assert result["queries"] == ["AI 相关工作", "机器学习项目", "大模型项目"]
     assert [item["chunk_id"] for item in result["results"]] == ["A", "B"]
+
+# 课后作业1
+def test_department_in_uses_bound_parameters():
+    # Arrange：模拟“模型已经编译好计划”的结果；不调用真实 LLM。
+    plan = _plan(
+        FilterCondition(
+            field="department",
+            operator="in",
+            value=["数据平台部", "研发部"],
+        )
+    )
+
+    # Act：构造 SQLAlchemy 查询对象；此处不访问数据库。
+    statement = build_candidate_statement(
+        plan, tenant_id="course-demo", today=date(2026, 9, 23)
+    )
+    compiled = statement.compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    params = compiled.params
+
+    # Assert A：选的是工号；WHERE 中有租户、系统 active 状态和部门 IN。
+    assert "employee_profiles.employee_no" in sql
+    assert "employee_profiles.tenant_id =" in sql
+    assert "employee_profiles.employment_status =" in sql
+    assert "employee_profiles.department IN" in sql
+    assert "ORDER BY employee_profiles.employee_no" in sql
+
+    # Assert B：三个条件的值都通过绑定参数携带。
+    department_key = next(key for key in params if key.startswith("department_"))
+    tenant_key = next(key for key in params if key.startswith("tenant_id_"))
+    status_key = next(key for key in params if key.startswith("employment_status_"))
+    assert params[department_key] == ["数据平台部", "研发部"]
+    assert params[tenant_key] == "course-demo"
+    assert params[status_key] == "active"
+
+    # Assert C：IN 列表尚未被字符串插入 SQL。
+    assert f"__[POSTCOMPILE_{department_key}]" in sql
+    assert "数据平台部" not in sql
+    assert "研发部" not in sql
+
+# 课后作业3
+def test_compiler_generates_two_semantic_requirements_for_two_experiences():
+    seen = {}
+
+    class StructuredModel:
+        def invoke(self, messages):
+            seen["messages"] = messages
+            return QueryPlan.model_validate(
+                {
+                    "task_type": "find_talent",
+                    "filters": [],
+                    "semantic_requirements": [
+                        {
+                            "requirement_id": "S1",
+                            "query": "Flink 实时计算项目经历",
+                            "required": True,
+                        },
+                        {
+                            "requirement_id": "S2",
+                            "query": "团队管理经历",
+                            "required": True,
+                        },
+                    ],
+                    "preferences": [],
+                    "clarifications": [],
+                }
+            )
+
+    class Model:
+        def with_structured_output(self, schema):
+            assert schema is QueryPlan
+            return StructuredModel()
+
+    plan = compile_query_plan(
+        "查找有 Flink 实时计算项目经历，并且有团队管理经历的候选人",
+        Model(),
+    )
+
+    assert [item.requirement_id for item in plan.semantic_requirements] == [
+        "S1",
+        "S2",
+    ]
+    assert [item.query for item in plan.semantic_requirements] == [
+        "Flink 实时计算项目经历",
+        "团队管理经历",
+    ]
+    assert all(item.required for item in plan.semantic_requirements)
+    assert "Flink" in seen["messages"][1][1]
+    assert "团队管理" in seen["messages"][1][1]

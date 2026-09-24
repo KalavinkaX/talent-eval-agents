@@ -28,7 +28,7 @@ class FilterField(StrEnum):
 
 
 class FilterCondition(BaseModel):
-    field: FilterField = Field(description="结构化人才字段，只能使用 FilterField 枚举中的值")
+    field: FilterField = Field(description="结构化人才字段，只能使用 FilterField 枚举中的值") # 对应pg数据库中employee_profiles表的字段结结构
     operator: Literal["eq", "in", "lt", "lte", "gt", "gte"] = Field(
         description="比较操作符：eq 等于，in 属于集合，lt/lte/gt/gte 为数值比较"
     )
@@ -59,15 +59,102 @@ class Clarification(BaseModel):
 
 class QueryPlan(BaseModel):
     task_type: TaskType = Field(description="查询任务类型，用于选择后续执行器")
-    filters: list[FilterCondition] = Field(default_factory=list, description="可由 PostgreSQL 精确执行的结构化硬条件")
-    semantic_requirements: list[SemanticRequirement] = Field(default_factory=list, description="需要调用混合检索寻找材料证据的条件")
-    preferences: list[str] = Field(default_factory=list, description="优先、倾向等软条件，保留给后续排序或评估，不作为 SQL 排除条件")
-    clarifications: list[Clarification] = Field(default_factory=list, description="缺少阈值、含义不明或互相矛盾的条件")
+    filters: list[FilterCondition] = Field(default_factory=list, description="可由 PostgreSQL 精确执行的结构化硬条件") # 对应employee_profiles表的可筛选字段结构
+    # 示例：
+    # [
+    #   {
+    #       "field": "department",
+    #       "operator": "in",
+    #       "value": ["数据平台部", "研发部"]
+    #   },
+    # ]
+
+    semantic_requirements: list[SemanticRequirement] = Field(default_factory=list, description="需要调用混合检索寻找材料证据的条件") # 向量化查询非结构化数据
+    # 示例：
+    # [
+    #   {
+    #       "requirement_id": "S1",
+    #       "query": "Flink 实时计算项目经历",
+    #       "required": true
+    #   },
+    #   {"requirement_id": "S2", "query": "团队管理经历", "required": true}
+    # ]
+
+    preferences: list[str] = Field(default_factory=list, description="优先、倾向等软条件，保留给后续排序或评估，不作为 SQL 排除条件") # (当前lesson-8仅定义 偏好 属性，暂未实现)
+    # 示例：
+    # ["金融行业项目经验优先"]
+
+    clarifications: list[Clarification] = Field(default_factory=list, description="缺少阈值、含义不明或互相矛盾的条件") # 只要存在待澄清项，就不能执行候选人 SQL。(当前lesson-8仅定义待 澄清条件 属性，暂未实现)
+    # 示例：
+    # [
+    #   {
+    #       "expression": "比较年轻",
+    #       "reason": "缺少可执行的年龄阈值"
+    #   },
+    # ]
 
     @property
     def executable(self) -> bool:
         return not self.clarifications
 
+    # 作业2：对age属性不可能情况进行提前检测
+    @model_validator(mode="after")
+    def validate_filter_consistency(self):
+        _validate_age_range(self.filters)
+        return self
+
+def _validate_age_range(filters: list[FilterCondition]):
+    lower: tuple[float,bool] | None = None
+    upper: tuple[float,bool] | None = None
+
+    for item in filters:
+        if item.field != FilterField.AGE:
+            continue
+
+        if item.operator not in {"lt", "lte", "gt", "gte"}:
+            continue
+
+        value = float(item.value)
+
+        # 判断是否重新设置下界
+        if item.operator in {"gt", "gte"}:
+            inclusive = item.operator == "gte"
+            if (
+                lower is None
+                or value > lower[0]
+                or (value == lower[0] and not inclusive and lower[1]) # 原本是 ">=" 现在新参数是 ">" 的情况
+            ):
+                lower = (value,inclusive)
+        # 判断是否重新设置上界
+        if item.operator in {"lt", "lte"}:
+            inclusive = item.operator == "lte"
+            if (
+                    upper is None
+                    or value < upper[0]
+                    or (value == upper[0] and not inclusive and upper[1])
+            ):
+                upper = (value, inclusive)
+
+    if lower is None or upper is None:
+        return
+
+    lower_value, lower_inclusive = lower
+    upper_value, upper_inclusive = upper
+
+    # 判断上下界边界
+    impossble = (
+        lower_value > upper_value
+        or (
+            lower_value == upper_value
+            and not (lower_inclusive and upper_inclusive)
+        )
+    )
+
+    if impossble:
+        raise ValueError(
+            "年龄区间冲突："
+            f"下界为 {lower_value}，上界为 {upper_value}"
+        )
 
 def _age_boundary(value: int, today: date) -> date:
     try:
@@ -192,10 +279,10 @@ def choose_optimization_strategy(*, hit_count: int, requirement_count: int, expr
     if hit_count > 0:
         return None
     if requirement_count > 1:
-        return "decompose"
+        return "decompose" # 拆分复杂要求
     if expression_is_vague:
-        return "rewrite"
-    return "multi_query"
+        return "rewrite" # # 改写模糊表达
+    return "multi_query" # 用多个不同说法扩展查询
 
 
 def optimize_semantic_query(requirement: SemanticRequirement, *, strategy: str, model: Any) -> QueryOptimizationPlan:
@@ -238,7 +325,7 @@ def search_with_optimization(
     if strategy is None:
         return {"strategy": None, "queries": [requirement.query], "results": first_pass}
 
-    optimization = optimize_semantic_query(requirement, strategy=strategy, model=model)
+    optimization = optimize_semantic_query(requirement, strategy=strategy, model=model) # 针对一项检索不到的经历要求，生成最多三条替代检索文本，输出 QueryOptimizationPlan
     fallback_results = [search_query(query) for query in optimization.queries]
     return {
         "strategy": optimization.strategy,
@@ -256,7 +343,9 @@ QUERY_PLAN_SYSTEM_PROMPT = """你是人才查询计划编译器。只把用户�
 
 
 def compile_query_plan(query: str, model: Any) -> QueryPlan:
-    structured_model = model.with_structured_output(QueryPlan)
+    structured_model = model.with_structured_output(QueryPlan) # 通过with_structured_outputg方法限定LLM输出的结构 不是已返回json!
+
     return structured_model.invoke(
         [("system", QUERY_PLAN_SYSTEM_PROMPT.format(filter_dsl=filter_dsl_catalog())), ("user", query)]
     )
+    # 拿到结构定义model后再根据插入 filter_dsl的system prompt 输出 QueryPlan

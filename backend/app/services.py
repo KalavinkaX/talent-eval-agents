@@ -82,14 +82,14 @@ def parse_version(db: Session, store: ObjectStore, version_id: UUID, job_id: UUI
     try:
         content = store.get_bytes(file_object.object_key)
         suffix = Path(file_object.original_name).suffix
-        with tempfile.NamedTemporaryFile(suffix=suffix) as temp:
-            temp.write(content)
-            temp.flush()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir) / f"source{suffix}"
+            temp_path.write_bytes(content)
             if parser_kind == ParserKind.MINERU:
-                result = parse_with_mineru(Path(temp.name))
+                result = parse_with_mineru(temp_path)
             else:
                 try:
-                    result = parse_document(Path(temp.name))
+                    result = parse_document(temp_path)
                 except Exception as exc:
                     if suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg"}:
                         raise
@@ -99,7 +99,7 @@ def parse_version(db: Session, store: ObjectStore, version_id: UUID, job_id: UUI
                         file_object.original_name,
                         exc,
                     )
-                    result = parse_with_mineru(Path(temp.name))
+                    result = parse_with_mineru(temp_path)
         markdown = result.text.encode("utf-8")
         structured = json.dumps(result.structured or result.metadata, ensure_ascii=False, indent=2).encode("utf-8")
         base = f"artifacts/{job.id}"

@@ -532,7 +532,7 @@ def hybrid_search_evidence(
     ]
 
 
-@router.post("/talent-search/plan")
+@router.post("/talent-search/plan") # 仅拿回结构化的 QueryPlan 对象
 def create_talent_query_plan(payload: QueryPlanInput):
     model = get_chat_model(temperature=0)
     if model is None:
@@ -544,7 +544,7 @@ def create_talent_query_plan(payload: QueryPlanInput):
         raise HTTPException(503, f"查询计划生成失败: {exc}") from exc
 
 
-@router.post("/talent-search/candidates")
+@router.post("/talent-search/candidates") # 查询候选人核心链路，传入 QueryPlan结构化对象
 def query_talent_candidates(
     plan: QueryPlan,
     x_tenant_id: str = Header(...),
@@ -553,13 +553,13 @@ def query_talent_candidates(
     if not plan.executable:
         raise HTTPException(422, {"code": "clarification_required", "items": [item.model_dump() for item in plan.clarifications]})
     try:
-        candidate_ids = select_candidate_ids(db, plan, tenant_id=x_tenant_id)
+        candidate_ids = select_candidate_ids(db, plan, tenant_id=x_tenant_id) # 核心
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     return {"candidate_ids": candidate_ids, "candidate_count": len(candidate_ids), "semantic_requirements": plan.semantic_requirements}
 
 
-@router.post("/talent-search")
+@router.post("/talent-search") # 查询候选人接口完整全链路
 def search_talent(
     payload: TalentSearchInput,
     x_tenant_id: str = Header(...),
@@ -613,13 +613,13 @@ def search_talent(
                 rerank_top_n=payload.rerank_top_n,
             )
 
-        searches = []
-        result_sets = []
-        requirement_ids_by_chunk: dict[str, list[str]] = {}
+        searches = [] # 每项要求的检索过程摘要
+        result_sets = [] # 每项要求检索得到的 Chunk 列表
+        requirement_ids_by_chunk: dict[str, list[str]] = {} # 某个 Chunk 是为了哪些要求召回的
         for requirement in plan.semantic_requirements:
-            if payload.retrieval_mode == "auto_optimize":
+            if payload.retrieval_mode == "auto_optimize": # 先用原始查询检索一次；只有第一次没有命中时，调用模型生成改写查询，再做补充检索
                 outcome = search_with_optimization(requirement, search_query=run_hybrid_search, model=model)
-            else:
+            else: # "standard"无论是否检索到向量数据都直接返回
                 results = run_hybrid_search(requirement.query)
                 outcome = {"strategy": None, "queries": [requirement.query], "results": results}
             result_sets.append(outcome["results"])
