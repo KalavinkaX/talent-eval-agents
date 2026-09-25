@@ -655,11 +655,14 @@ def search_talent(
             "searches": searches,
             "chunks": chunks,
         }
+        # 开启证据包
         if payload.include_evidence_pack:
+            # 把前面检索的milvus chunks，从pg数据库读取 chunk 及其 父chunk 块相关表的文本块信息
             sources = load_pack_sources(db, chunks, tenant_id=x_tenant_id,
                 permission_scopes=permission_scopes)
             # Do not return stale/unauthorized index text alongside the validated pack.
             source_by_id = {row["chunk_id"]: row for row in sources}
+            # 替换不和权限等 source chunk引用来源
             response["chunks"] = [dict(hit, content=source_by_id[hit["chunk_id"]]["content"])
                 for hit in chunks if hit["chunk_id"] in source_by_id]
             response["evidence_packs"] = build_evidence_packs(

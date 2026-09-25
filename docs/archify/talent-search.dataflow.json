@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {"title":"POST /api/talent-search · 数据流转","locale":"zh-CN","quality_profile":"showcase","viewBox":[1080,620]},
+  "stages":[{"label":"请求"},{"label":"计划"},{"label":"候选"},{"label":"检索"},{"label":"输出"}],
+  "nodes":[
+    {"id":"request","type":"frontend","label":"HTTP 请求","sublabel":"query + scopes","stage":0,"row":2,"width":130},
+    {"id":"plan","type":"backend","label":"QueryPlan","sublabel":"硬条件 + 语义要求","stage":1,"row":2,"width":130},
+    {"id":"profiles","type":"database","label":"PG 人员档案","sublabel":"tenant + active","stage":1,"row":0,"width":130},
+    {"id":"candidates","type":"backend","label":"候选 SQL","sublabel":"Filter DSL","stage":2,"row":2,"width":130},
+    {"id":"index","type":"database","label":"Milvus 索引","sublabel":"文本 + 向量","stage":2,"row":3,"width":130},
+    {"id":"search","type":"backend","label":"混合检索","sublabel":"embed + RRF + rerank","stage":3,"row":2,"width":135},
+    {"id":"merge","type":"backend","label":"合并命中","sublabel":"去重 Chunk","stage":4,"row":0,"width":130},
+    {"id":"verify","type":"security","label":"PG 鉴权回读","sublabel":"current + parent","stage":4,"row":1,"width":130},
+    {"id":"pack","type":"backend","label":"证据包","sublabel":"facts + citations","stage":4,"row":2,"width":130},
+    {"id":"response","type":"frontend","label":"HTTP 响应","sublabel":"plan / IDs / chunks","stage":4,"row":3,"width":130}
+  ],
+  "flows":[
+    {"id":"request-plan","from":"request","to":"plan","label":"query","variant":"emphasis","route":"straight","fromSide":"right","toSide":"left","labelDy":-24},
+    {"id":"plan-candidates","from":"plan","to":"candidates","label":"filters + tenant","variant":"emphasis","route":"straight","fromSide":"right","toSide":"left","labelAt":[350,330]},
+    {"id":"profiles-candidates","from":"profiles","to":"candidates","label":"EmployeeProfile","variant":"default","fromSide":"right","toSide":"left","labelDy":-22},
+    {"id":"candidate-search","from":"candidates","to":"search","label":"candidate_ids + requirements","variant":"emphasis","route":"straight","fromSide":"right","toSide":"left","labelDy":-24},
+    {"id":"index-search","from":"index","to":"search","label":"权限过滤召回","variant":"security","fromSide":"right","toSide":"left","labelDy":-22},
+    {"id":"search-merge","from":"search","to":"merge","label":"ranked hits","variant":"emphasis","fromSide":"right","toSide":"left","labelDy":-24},
+    {"id":"merge-verify","from":"merge","to":"verify","label":"chunk_id · optional","variant":"dashed","route":"straight","fromSide":"bottom","toSide":"top","labelAt":[1000,210]},
+    {"id":"verify-pack","from":"verify","to":"pack","label":"trusted source","variant":"security","route":"straight","fromSide":"bottom","toSide":"top","labelAt":[1000,320]},
+    {"id":"pack-response","from":"pack","to":"response","label":"evidence_packs / chunks","variant":"emphasis","route":"straight","fromSide":"bottom","toSide":"top","labelAt":[994,428]}
+  ],
+  "cards":[
+    {"dot":"cyan","title":"主路径","items":["QueryPlan 把硬条件与语义要求拆开；候选 SQL 只在租户内筛 active 人员。","每个 semantic requirement 经过 Embedding、Milvus hybrid search、RRF 与 rerank，再合并去重 Chunk。"]},
+    {"dot":"rose","title":"证据可信边界","items":["命中 Chunk 回 PostgreSQL 重新校验租户、权限、candidate、现行版本；可补同版本 parent Chunk。","证据抽取只接受能在原文中逐字验证的引用，并合并重复事实、标记冲突。"]},
+    {"dot":"amber","title":"分支行为","items":["include_evidence_pack=false 时跳过证据回读与抽取；无候选直接返回空结果。","权限缺失 403、服务缺失 503、需要澄清 422；auto_optimize 仅零命中时触发。"]}
+  ]
+}
+
+
+
+
+
+
+
