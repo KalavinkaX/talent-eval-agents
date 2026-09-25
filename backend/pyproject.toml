@@ -40,6 +40,7 @@ dev = [
     "langgraph-cli[inmem]>=0.4.31,<0.5",
     "pytest>=8.4.1",
     "pytest-cov>=6.2.1",
+    "typesafe-sdk>=0.7.0",
 ]
 
 [tool.pytest.ini_options]

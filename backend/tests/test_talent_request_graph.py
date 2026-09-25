@@ -159,7 +159,26 @@ def test_ambiguous_job_match_interrupts_and_resumes_same_thread():
     assert lookup_calls == ["AI 应用工程师"]
 
 
-def test_no_job_match_returns_clarification_result_without_building_plan():
+def test_ambiguous_job_match_can_be_cancelled():
+    matches = [
+        _job("JD-AI-001", "高级 AI 应用工程师", match_type="contains"),
+        _job("JD-AI-002", "AI 应用工程师（平台方向）", match_type="contains"),
+    ]
+    graph = build_talent_request_graph(
+        request_interpreter=FixtureInterpreter(),
+        job_lookup=lambda query, context: matches,
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": "lesson14-cancel-job"}}
+
+    interrupted = graph.invoke({"request_text": "AI 应用工程师"}, config, context=_context())
+    assert interrupted["__interrupt__"][0].value["actions"] == ["select", "cancel"]
+
+    result = graph.invoke(Command(resume={"action": "cancel"}), config, context=_context())
+    assert result["status"] == "cancelled"
+    assert graph.get_state(config).next == ()
+
+def test_no_job_match_ends_without_building_plan():
     graph = build_talent_request_graph(
         request_interpreter=FixtureInterpreter(),
         job_lookup=lambda query, context: [],
@@ -172,7 +191,7 @@ def test_no_job_match_returns_clarification_result_without_building_plan():
         context=_context(),
     )
 
-    assert result["status"] == "clarification_required"
+    assert result["status"] == "no_job_match"
     assert result["query_plan"] == {}
     assert result["clarifications"] == [
         {"expression": "量子招聘架构师", "reason": "未找到可确认的岗位 JD"}

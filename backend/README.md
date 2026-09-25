@@ -16,6 +16,8 @@
 | `app/talent_evaluation_runtime.py` | 装配第 15 课分发图与第 16 课报告图，分别导出 `graph` 和 `report_graph` |
 | `app/talent_evaluation_report.py` | 12 路单维度评分、候选人级一致性检查、短引用映射、候选人聚合、排序和报告校验渲染 |
 | `scripts/verify_talent_evaluation_report.py` | 读取第 15 课分发结果并调用正式 `report_graph` 验证评分、聚合和报告链路 |
+| `app/talent_request_graph.py` | 第 14 课输入编译图；第 17 课扩展 `filter_candidates`、`resolve_conditions`、`resolve_empty_candidates` 节点，支持空候选 leave-one-out 诊断、条件修订写回、带错重问、取消与局部重跑 |
+| `scripts/verify_talent_hitl_resume.py` | 第 17 课 HITL 链路验证：直达、空候选放宽恢复、矛盾条件修订、过期提交重问、取消和 Time Travel 分叉 |
 
 第 16 课报告图默认最多并发执行 12 个候选人 × 维度评分任务，并按候选人并发执行跨维度一致性检查。模型上下文使用 `E1`、`E2` 形式的短证据编号，图 State 保留短编号到完整 Chunk ID 的映射，模型返回后恢复完整 ID 再执行白名单和候选人归属校验。报告正文显示短编号，引用链接仍使用完整 Chunk ID 与原文偏移
 
@@ -48,6 +50,14 @@ uv run --no-sync python -m scripts.verify_talent_evaluation_dispatch \
 `--max-concurrency` 默认值为 6，用于控制 LangGraph 候选人 × 维度分支的并发上限。每个分支内部并发执行当前维度的全部 `evidence_requirements`，并按原始要求顺序聚合结果。
 
 日志使用 `task_id`、`call_id`、`requirement_id` 和 `chunk_id` 连接图节点、工具调用、混合检索、原文回表、事实抽取和来源校验，不记录履历原文或模型 Prompt
+
+运行第 17 课 HITL 可恢复链路验证：
+
+```bash
+uv run --no-sync python -m scripts.verify_talent_hitl_resume
+```
+
+`build_talent_request_graph(candidate_filter=None)` 保持第 14 课图形状；`langgraph.json` 注册的 `talent_request` 图挂载 `database_candidate_filter`，编译出可执行计划后继续执行候选人筛选，空候选或条件矛盾时进入 interrupt 等待修订
 
 ## 启动 API
 

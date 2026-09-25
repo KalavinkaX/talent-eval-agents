@@ -365,7 +365,7 @@ uv run --no-sync pytest -q tests/test_codestats_mcp_v2.py tests/test_talent_mcp_
 
 | 路径 | 用途 |
 |---|---|
-| `backend/app/talent_request_graph.py` | 区分详细要求与岗位名称，完成岗位路由、确认中断、恢复和执行计划编译 |
+| `backend/app/talent_request_graph.py` | 区分详细要求与岗位名称，完成岗位确认、统一要求修订和执行计划编译 |
 | `backend/app/lesson14_demo_data.py` | 按 `job_code` 幂等写入课程演示岗位 |
 | `backend/app/talent_tools.py` | 岗位查询结果增加 `exact`、`contains`、`fuzzy` 匹配类型 |
 | `backend/langgraph.json` | 为本地 Agent Server 注册 `talent_request` 图 |
@@ -376,6 +376,8 @@ uv run --no-sync pytest -q tests/test_codestats_mcp_v2.py tests/test_talent_mcp_
 | `backend/tests/test_talent_request_graph.py` | 验证详细要求直达、精确项直达、歧义岗位恢复和无匹配结果 |
 
 详细人才要求直接编译为 `TalentRequest` 与第 8 课的 `QueryPlan`。岗位名称先调用 `lookup_job_descriptions`，唯一 `exact` 项自动确认，只有 `contains` 或 `fuzzy` 候选时进入 `confirm_job`。中断载荷包含 `type`、问题、原始请求和岗位选项，恢复值使用 `{"action":"select","job_code":"..."}`
+
+第 17 课在候选人筛选启用时增加统一的 `resolve_requirements` 节点。计划无法执行或候选集为空都会返回 `requirement_revision` 载荷，前端使用载荷中的完整 `request_text` 初始化编辑框，用户通过 `revision_text` 提交修改后的完整要求。节点直接覆盖当前 `request_text`，再回到 `interpret_input` 重新生成草稿和查询计划。岗位非精确匹配支持选择或取消，岗位无匹配以 `no_job_match` 终态结束
 
 岗位查询和 `interrupt()` 位于两个节点。恢复会从 `confirm_job` 开头重启，但不会再次执行已经完成的 `lookup_jobs`。租户与权限仍由 `DecisionContext` 注入，不进入模型生成的 `TalentRequest` 或 `QueryPlan`
 
