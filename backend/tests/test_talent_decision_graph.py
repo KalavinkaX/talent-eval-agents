@@ -81,3 +81,30 @@ def test_parallel_updates_with_reducer_are_aggregated():
     result = graph.invoke({"items": []})
 
     assert sorted(result["items"]) == ["A", "B"]
+
+from app import talent_decision_graph as decision_module
+
+
+def test_empty_report_fails_after_one_retry(monkeypatch):
+    monkeypatch.setattr(
+        decision_module, "_compose_report",
+        lambda state: {"report": "", "status": "drafting"},
+    )
+    graph = decision_module.build_talent_decision_graph(
+        candidate_provider=lambda request, context: ["C001"]
+    )
+    events = list(graph.stream(
+        {"messages": [], "request_text": "筛选 AI 工程师"},
+        context=_context(), stream_mode="updates",
+    ))
+    assert [next(iter(event)) for event in events].count("compose_report") == 2
+    checks = [event["validate_report"] for event in events if "validate_report" in event]
+    assert checks == [
+        {"retry_count": 1},
+        {"retry_count": 2, "status": "failed", "errors": ["报告为空"]},
+    ]
+    # 如需断言最终 output，可再单独 invoke 一次相同输入（这会重新运行整个图）。
+    result = graph.invoke({"messages": [], "request_text": "筛选 AI 工程师"}, context=_context())
+    assert result["status"] == "failed"
+    assert result["report"] == ""
+    assert result["errors"] == ["报告为空"]

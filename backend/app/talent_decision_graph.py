@@ -51,16 +51,19 @@ class TalentDecisionState(TypedDict, total=False):
     request_text: str
     request: TalentRequest
     candidate_ids: list[str]
-    evidence_refs: Annotated[list[str], list.__add__]
+    evidence_refs: Annotated[list[str], merge_evidence_refs] #作业2： 添加去按引用id去重reducer函数[merge_evidence_refs]    # 引用chunkid等，仅引用，实际数据去数据库拿
     evaluations: Annotated[list[EvaluationResult], list.__add__]
     report: str
     status: DecisionStatus
     errors: Annotated[list[str], list.__add__]
     retry_count: int
 
+def merge_evidence_refs(left: list[str], right: list[str]) -> list[str]:
+    """ ref引用id去重reducer函数"""
+    return list(dict.fromkeys([*left, *right])) # 这里是用dict key来去重，不用set是为了保留ref引用顺序
 
 @dataclass(frozen=True)
-class DecisionContext:
+class DecisionContext: # 用于 START节点 后第一个鉴权节点
     tenant_id: str
     permission_scopes: tuple[str, ...]
 
@@ -89,6 +92,7 @@ def _prepare_request(state: TalentDecisionState) -> dict:
             "original_text": state["request_text"],
             "task_type": "evaluate_and_recommend",
         },
+        "request_version": 1, # 作业1应选覆盖，因为version是指当前版本，不需要add累计或相加
         "status": "request_ready",
     }
 
@@ -121,12 +125,12 @@ def _compose_report(state: TalentDecisionState) -> dict:
     candidate_text = "、".join(item["candidate_id"] for item in state["evaluations"])
     return {"report": f"候选人评估占位结果：{candidate_text}", "status": "drafting"}
 
-
+MAX_REPORT_RETRIES = 1  # 空报告后最多额外生成一次；不是总尝试次数
 def _validate_report(state: TalentDecisionState) -> dict:
     if state.get("report"):
         return {"status": "completed"}
     retries = state.get("retry_count", 0) + 1
-    if retries > 1:
+    if retries > MAX_REPORT_RETRIES: # 作业3：报告始终为空，重试上限1次后 failed
         return {"retry_count": retries, "status": "failed", "errors": ["报告为空"]}
     return {"retry_count": retries}
 
@@ -146,11 +150,12 @@ def _no_candidates(_: TalentDecisionState) -> dict:
 
 
 def build_talent_decision_graph(candidate_provider: CandidateProvider):
+    # 状态图构造器 StateGraph
     builder = StateGraph(
-        TalentDecisionState,
-        context_schema=DecisionContext,
-        input_schema=TalentDecisionInput,
-        output_schema=TalentDecisionOutput,
+        TalentDecisionState, # 类似于基础 State 对象
+        context_schema=DecisionContext, # 用于控制用户角色，权限的 Runtime Context
+        input_schema=TalentDecisionInput, # 限制调用方可提交的字段
+        output_schema=TalentDecisionOutput, # 限制最终返回的数据
     )
     builder.add_node("receive_request", _receive_request)
     builder.add_node("prepare_request", _prepare_request)

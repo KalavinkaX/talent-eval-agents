@@ -29,6 +29,7 @@ def main() -> None:
     mermaid = graph.get_graph().draw_mermaid()
     print(f"[graph mermaid]\n{mermaid}")
     print("[normal] updates")
+    trace = [] # 作业4：打印节点更新字段测试
     for update in graph.stream(
         {
             "messages": [HumanMessage(content="筛选有 AI 项目经验的技术负责人")],
@@ -37,7 +38,15 @@ def main() -> None:
         context=context,
         stream_mode="updates",
     ):
+        for node, delta in update.items():
+            record = {"node": node, "fields": list(delta.keys()), "values": delta}
+            trace.append(record)
+            print(_json(record))
+
+        # update 是Graph每个Node节点的节点名称 以及 节点运行后 return的参数 (可Debug)
         print(_json(update))
+
+    print("[normal] field trace:", [(row["node"], row["fields"]) for row in trace])
 
     empty_result = graph.invoke(
         {"messages": [], "request_text": "筛选 Java 工程师"},
