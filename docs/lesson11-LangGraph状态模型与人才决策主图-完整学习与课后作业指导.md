@@ -27,42 +27,37 @@
 
 ```mermaid
 flowchart TD
-    %% 节点定义
     START([__start__])
     END([__end__])
-    
-    receive_request["receive_request<br/>(租户校验 / 清洗请求)"]
+
+    receive_request["receive_request<br/>(租户校验/清洗请求)"]
     prepare_request["prepare_request<br/>(构建标准化请求)"]
     retrieve_candidates["retrieve_candidates<br/>(检索候选人ID)"]
-    
+
     cond_candidates{"候选人列表<br/>是否为空?"}
-    
+
     no_candidates["no_candidates<br/>(生成无候选人提示)"]
-    evaluate["evaluate<br/>(评估打分 / 生成占位)"]
+    evaluate["evaluate<br/>(评估打分/生成占位)"]
     compose_report["compose_report<br/>(起草评估报告)"]
-    validate_report["validate_report<br/>(校验报告 / 重试计数)"]
-    
+    validate_report["validate_report<br/>(校验报告/重试计数)"]
+
     cond_report{"状态是否为<br/>completed 或 failed?"}
 
-    %% 边与流转关系
     START --> receive_request
-    
-    %% receive_request 内部通过 Command(goto="prepare_request") 动态跳转
+
     receive_request -. "Command(goto)" .-> prepare_request
-    
+
     prepare_request --> retrieve_candidates
-    
-    %% 条件边：_route_candidates
+
     retrieve_candidates --> cond_candidates
     cond_candidates -- "无候选人 (no_candidates)" --> no_candidates
     cond_candidates -- "有候选人 (evaluate)" --> evaluate
-    
+
     no_candidates --> END
-    
+
     evaluate --> compose_report
     compose_report --> validate_report
-    
-    %% 条件边：_route_report
+
     validate_report --> cond_report
     cond_report -- "retry (重试)" --> compose_report
     cond_report -- "done (完成/超限失败)" --> END
