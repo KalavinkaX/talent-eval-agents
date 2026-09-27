@@ -108,6 +108,7 @@ class TalentEvaluationDispatchState(TypedDict, total=False):
     query_plan: dict[str, Any]
     dimensions: list[dict[str, Any]]
     candidate_ids: list[str]
+    candidates_preselected: bool
     work_items: list[dict[str, Any]]
     branch_results: Annotated[list[dict[str, Any]], operator.add]
     validation_issues: list[dict[str, Any]]
@@ -539,9 +540,11 @@ def _receive_input(
         raise ValueError("talent_request 不能为空")
     if not state.get("query_plan"):
         raise ValueError("query_plan 不能为空")
+    candidates_preselected = "candidate_ids" in state
     return {
         "dimensions": [],
-        "candidate_ids": [],
+        "candidate_ids": list(state.get("candidate_ids", [])),
+        "candidates_preselected": candidates_preselected,
         "work_items": [],
         "branch_results": [],
         "validation_issues": [],
@@ -587,9 +590,11 @@ def _validate_dimensions(state: TalentEvaluationDispatchState) -> dict[str, Any]
 
 def _route_dimension_validation(
     state: TalentEvaluationDispatchState,
-) -> Literal["retrieve_candidates", "dimension_invalid"]:
+) -> Literal["retrieve_candidates", "prepare_work_items", "dimension_invalid"]:
     if state.get("validation_issues"):
         return "dimension_invalid"
+    if state.get("candidates_preselected"):
+        return "prepare_work_items"
     return "retrieve_candidates"
 
 

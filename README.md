@@ -521,6 +521,48 @@ uv run --no-sync pytest -q \
 
 结果输出为 `64 passed, 2 warnings in 2.32s`，后端完整回归为 `218 passed, 1 skipped, 2 warnings in 89.75s`
 
+## 第 18 课人才评估子图与决策引擎整合
+
+| 路径 | 用途 |
+|---|---|
+| `backend/app/talent_decision_engine.py` | 定义决策引擎主 State、三张子图的编排和终态路由 |
+| `backend/app/talent_decision_runtime.py` | 装配要求确认、评估分发和报告合成子图，导出 Agent Server 可加载的主图 |
+| `backend/scripts/verify_talent_decision_events.py` | 使用确定性子图逐节点输出 scope、节点名和 State 局部更新，`--pause` 用于课堂单步演示 |
+| `backend/tests/test_talent_decision_engine.py` | 验证候选人 State 传递、终态截断和主图注册 |
+| `backend/langgraph.json` | 以 `talent_decision_engine` 注册整合后的决策引擎 |
+
+主图按 `request_subgraph -> evaluation_subgraph -> report_subgraph` 顺序编排三张已有业务子图。要求确认子图只有在 `candidates_ready` 状态下才进入评估分发。评估分发产出 `branches_ready` 或 `branches_ready_with_failures` 时继续生成报告，其他终态不进入报告子图
+
+第 17 课已确认的 `candidate_ids` 会直接传入评估分发子图。分发图使用 `candidates_preselected` 区分主图传入与独立调用：主图传入时跳过重复候选人查询，独立运行时仍使用原有 `candidate_provider`
+
+Agent Server 为主图提供 Checkpointer。三张子图保持默认的单次调用持久化，运行时继承主图 Checkpointer，因此要求确认子图中的 `interrupt()` 可以暂停和恢复，评估子图的内部状态不会跨请求积累
+
+运行逐节点事件演示：
+
+```bash
+cd backend
+uv run --no-sync python -m scripts.verify_talent_decision_events
+```
+
+增加 `--pause` 后，脚本在每个节点输出后等待回车
+
+运行第 14～18 课联合回归：
+
+```bash
+cd backend
+uv run --no-sync pytest -q \
+  tests/test_talent_request_graph.py \
+  tests/test_talent_request_hitl.py \
+  tests/test_talent_evaluation_dispatch.py \
+  tests/test_talent_evaluation_report.py \
+  tests/test_talent_decision_engine.py \
+  tests/test_talent_decision_graph.py
+```
+
+结果输出为 `57 passed, 2 warnings in 1.71s`
+
+后端完整回归结果为 `230 passed, 1 skipped, 2 warnings in 10.57s`
+
 ## Chunk 模块
 
 | 路径 | 用途 |

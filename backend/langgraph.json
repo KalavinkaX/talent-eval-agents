@@ -3,7 +3,8 @@
   "graphs": {
     "talent_request": "./app/talent_request_graph.py:graph",
     "talent_evaluation_dispatch": "./app/talent_evaluation_runtime.py:graph",
-    "talent_evaluation_report": "./app/talent_evaluation_runtime.py:report_graph"
+    "talent_evaluation_report": "./app/talent_evaluation_runtime.py:report_graph",
+    "talent_decision_engine": "./app/talent_decision_runtime.py:graph"
   },
   "env": "../.env",
   "python_version": "3.12"

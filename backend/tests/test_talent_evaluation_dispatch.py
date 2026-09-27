@@ -112,6 +112,44 @@ def test_graph_dispatches_every_candidate_dimension_pair_and_aggregates_results(
     }
 
 
+def test_graph_reuses_preselected_candidates_without_querying_again():
+    from app.talent_decision_graph import DecisionContext
+    from app.talent_evaluation_dispatch import (
+        BranchEvidenceDraft,
+        EvaluationDimensionPlan,
+        build_talent_evaluation_dispatch_graph,
+    )
+
+    plan = EvaluationDimensionPlan(
+        dimensions=[_dimension("rag_delivery", weight_percent=100, source_requirement_ids=["S1"])]
+    )
+    graph = build_talent_evaluation_dispatch_graph(
+        dimension_generator=lambda request, query_plan: plan,
+        candidate_provider=lambda query_plan, context: (_ for _ in ()).throw(
+            AssertionError("主图已提供候选人时不应重复查询")
+        ),
+        branch_worker=lambda work_item, context: BranchEvidenceDraft(
+            task_id=work_item.task_id,
+            candidate_id=work_item.candidate_id,
+            dimension_number=work_item.dimension_number,
+            execution_status="succeeded",
+        ),
+    )
+
+    result = graph.invoke(
+        {
+            "talent_request": {"original_text": "招聘 AI 应用工程师"},
+            "query_plan": {"task_type": "find_talent", "filters": []},
+            "candidate_ids": ["C001", "C002"],
+        },
+        context=DecisionContext(tenant_id="tenant-a", permission_scopes=("hr_private",)),
+    )
+
+    assert result["status"] == "branches_ready"
+    assert result["candidate_ids"] == ["C001", "C002"]
+    assert [item["candidate_id"] for item in result["work_items"]] == ["C001", "C002"]
+
+
 def test_graph_stops_when_dimension_weights_are_invalid():
     from app.talent_decision_graph import DecisionContext
     from app.talent_evaluation_dispatch import (
