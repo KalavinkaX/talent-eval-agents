@@ -30,6 +30,8 @@ def talent_context_from_token(token: AccessToken) -> TalentToolContext:
         raise PermissionError("Access Token 缺少 tenant_id")
     if not permission_scopes:
         raise PermissionError("Access Token 缺少 permission_scopes")
+
+    # Access Token 映射为第 12 课的可信 TalentToolContext:
     return TalentToolContext(
         tenant_id=tenant_id,
         permission_scopes=permission_scopes,
@@ -53,6 +55,7 @@ def build_talent_mcp_server(
     token_verifier: TokenVerifier | None = None,
     auth: AuthSettings | None = None,
 ) -> MCPServer:
+    # 定义MCP Server 核心装配
     server = MCPServer(
         "Talent Capability Service",
         version="13.1.0",
@@ -60,6 +63,8 @@ def build_talent_mcp_server(
         token_verifier=token_verifier,
         auth=auth,
     )
+    # 下文依次 @server.tool(...)、@server.resource(...)、@server.prompt(...)
+    # 都
 
     @server.tool(structured_output=True)
     def lookup_job_descriptions(
@@ -114,14 +119,16 @@ def build_talent_mcp_server(
             context=context,
             arguments={"candidate_ids": candidate_ids},
         )
-
+    # 作业1：新增版本控制
     @server.resource(
-        "talent://jobs/{job_code}",
+        "talent://jobs/{job_code}/versions/{version}",
         title="岗位 JD",
         mime_type="application/json",
     )
     def job_description(job_code: str) -> dict[str, Any]:
         item = service.get_job_description(job_code, context=context_provider())
+        # 作业1：可改方法version参数，再在方法内加入version SQL 限制条件
+        # item = service.get_job_description(job_code, context=context_provider(), version: int | None = None)
         if item is None:
             raise ResourceNotFoundError("岗位 JD 不存在或当前身份无权访问")
         return item

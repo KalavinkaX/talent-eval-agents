@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 
+import httpx
 from mcp.server import MCPServer
 
 
@@ -39,6 +40,49 @@ def _count_python_lines(project_dir: Path) -> int:
             logger.warning("无法读取文件 %s: %s", file_path, exc)
     return total_lines
 
+async def get_current_weather(city_name: str) -> dict[str, object]:
+    city_name = city_name.strip()
+    if not city_name or len(city_name) > 100:
+        raise ValueError("请提供长度不超过 100 字符的城市名")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            geo_response = await client.get("https://geocoding-api.open-meteo.com/v1/search",
+                                            params={"name": city_name, "language": "zh"})
+            geo_response.raise_for_status()
+            locations = geo_response.json().get("results") or []
+            if not locations:
+                raise ValueError(f"未找到城市：{city_name}")
+
+            location = locations[0]
+            weather_response = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={"latitude": location["latitude"],
+                        "longitude": location["longitude"],
+                        "current": ("temperature_2m,relative_humidity_2m,"
+                                    "weather_code"), "timezone": "auto",
+                        },
+            )
+            weather_response.raise_for_status()
+            data = weather_response.json()
+
+    except httpx.HTTPError as exc:
+        logger.exception("天气服务请求失败")
+        raise RuntimeError("天气服务暂时不可用，请稍后重试") from exc
+
+    current = data.get("current")
+    if not isinstance(current, dict):
+        raise RuntimeError("天气服务未返回当前天气数据")
+
+    return {
+        "location": location["name"],
+        "country": location.get("country"),
+        "timezone": data.get("timezone"),
+        "observed_at": current.get("time"),
+        "temperature_c": current.get("temperature_2m"),
+        "relative_humidity_percent": current.get("relative_humidity_2m"),
+        "weather_code": current.get("weather_code"),
+        "source": "Open-Meteo",
+    }
 
 def build_server(base_dir: str | Path) -> MCPServer:
     root = Path(base_dir).expanduser().resolve()
@@ -53,9 +97,16 @@ def build_server(base_dir: str | Path) -> MCPServer:
     @server.resource("info://{project_name}")
     def get_project_info(project_name: str) -> str:
         """读取项目的 Python 代码行数摘要。"""
-        project_dir = _resolve_project(root, project_name)
-        lines = _count_python_lines(project_dir)
+        # project_dir = _resolve_project(root, project_name)
+        # lines = _count_python_lines(project_dir)
+        lines = "测试数据"
         return f"项目 {project_name} 包含 {lines} 行 Python 代码"
+
+    # 新增天气测试Tool
+    @server.tool()
+    async def get_weather(city_name: str) -> dict[str, object]:
+        """查询指定城市的当前天气，返回地点、数据时间、气温、湿度和天气代码。"""
+        return await get_current_weather(city_name)
 
     return server
 
@@ -63,5 +114,6 @@ def build_server(base_dir: str | Path) -> MCPServer:
 mcp = build_server(os.environ.get("CODE_STATS_ROOT", str(Path.cwd())))
 
 
+# uv run mcp dev samples/lesson13/codestats_mcp_v2.py
 if __name__ == "__main__":
     mcp.run("stdio")
