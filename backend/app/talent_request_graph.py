@@ -16,7 +16,7 @@ from app.talent_decision_graph import DecisionContext
 from app.talent_tools import TalentToolContext, TalentToolService
 
 
-RequestInputMode = Literal["detailed_requirement", "job_name"]
+RequestInputMode = Literal["detailed_requirement", "job_name"] # 通过LLM 判断用户input是 职位描述(无具体职位) 还是 具体职位
 RequestStatus = Literal[
     "received",
     "request_understood",
@@ -24,6 +24,7 @@ RequestStatus = Literal[
     "job_confirmed",
     "plan_ready",
     "clarification_required",
+    "cancelled", # 作业1(第1部分)：添加取消状态
 ]
 
 
@@ -82,7 +83,7 @@ class TalentRequestState(TypedDict, total=False):
 RequestInterpreter = Callable[[str, JobMatch | None], TalentRequestDraft]
 JobLookup = Callable[[str, DecisionContext], list[JobMatch]]
 
-
+# Context 校验
 def _receive_request(state: TalentRequestState, runtime: Runtime[DecisionContext]) -> dict[str, Any]:
     if not runtime.context.tenant_id.strip():
         raise ValueError("Runtime Context 中的 tenant_id 不能为空")
@@ -102,7 +103,7 @@ def _receive_request(state: TalentRequestState, runtime: Runtime[DecisionContext
         "errors": [],
     }
 
-
+# 从query 输出受控草稿 TalentRequestDraft 对象 (后面的 model_request_interpreter()方法LLM提取)
 def _interpret_input(request_interpreter: RequestInterpreter):
     def interpret_input(state: TalentRequestState) -> dict[str, Any]:
         draft = request_interpreter(state["request_text"], None)
@@ -114,11 +115,11 @@ def _interpret_input(request_interpreter: RequestInterpreter):
 
     return interpret_input
 
-
+# 路由节点：判断用户input是 职位描述(无具体职位) 还是 具体职位
 def _route_input(state: TalentRequestState) -> Literal["lookup_jobs", "build_plan"]:
     return "lookup_jobs" if state["input_mode"] == "job_name" else "build_plan"
 
-
+# 主要是通过 Runtime (后面的 database_job_lookup()方法找到职位结构化数据)
 def _lookup_jobs(job_lookup: JobLookup):
     def lookup_jobs(state: TalentRequestState, runtime: Runtime[DecisionContext]) -> dict[str, Any]:
         job_query = str(state["draft"].get("job_query") or state["request_text"])
@@ -128,14 +129,18 @@ def _lookup_jobs(job_lookup: JobLookup):
     return lookup_jobs
 
 
+# 对于前面找到相关职位match的后续路由节点
 def _route_job_matches(
     state: TalentRequestState,
 ) -> Literal["select_exact_job", "confirm_job", "no_job_match"]:
     exact_matches = [item for item in state["job_matches"] if item["match_type"] == "exact"]
+    # exact 非常精确，不需后续 Human In The Loop 暂停 传入选择后 手动确认。直接走到 select_exact_job 节点
     if len(exact_matches) == 1:
         return "select_exact_job"
+    # 职位选择不够精确，需要后续 Human In The Loop 暂停 传入选择后 手动确认。之后走到 confirm_job 节点
     if state["job_matches"]:
         return "confirm_job"
+    # 未匹配到相关职位，直接走到 no_job_match
     return "no_job_match"
 
 
@@ -145,11 +150,13 @@ def _select_exact_job(state: TalentRequestState) -> dict[str, Any]:
 
 
 def _confirm_job(state: TalentRequestState) -> dict[str, Any]:
+    # 中断后若恢复，从该节点第一行开始重新执行，所以不能把写数据库等操作放在方法开头位置，否则可能会重复执行
     selection = interrupt(
         {
             "type": "job_selection",
             "question": "请选择本次人才评估使用的岗位 JD",
             "request_text": state["request_text"],
+            # 中断后给用户的职位可选项(从State中取)
             "options": [
                 {
                     "job_code": item["job_code"],
@@ -169,11 +176,92 @@ def _confirm_job(state: TalentRequestState) -> dict[str, Any]:
         (item for item in state["job_matches"] if item["job_code"] == selected_code),
         None,
     )
+    # 作业2：这里就是Human输入job_code不在候选类表里的情况...
     if selected is None:
         raise ValueError("恢复数据中的 job_code 不在待确认岗位列表中")
+        return {
+            "selected_job": None,
+            "talent_request": {},
+            "query_plan": {},
+            "clarifications": [],
+            "errors": ["岗位选择无效"],
+            "error_details": [{
+                "code": "INVALID_JOB_CODE",
+                "message": "所选岗位不在本次待确认列表中",
+                "field": "job_code",
+                "retryable": True,
+            }],
+            "status": "invalid_selection",
+        }
     return {"selected_job": selected, "status": "job_confirmed"}
 
+# # 作业1(第2部分)：为岗位确认增加cancel动作，并为取消路径补充状态与测试
+# def _confirm_job(state: TalentRequestState) -> dict[str, Any]:
+#     # 中断后若恢复，从该节点第一行开始重新执行，所以不能把写数据库等操作放在方法开头位置，否则可能会重复执行
+#     selection = interrupt(
+#         {
+#             "type": "job_selection",
+#             "question": "请选择本次人才评估使用的岗位 JD",
+#             "request_text": state["request_text"],
+#             # 中断后给用户的职位可选项(从State中取)
+#             "options": [
+#                 {
+#                     "job_code": item["job_code"],
+#                     "name": item["name"],
+#                     "match_score": item["match_score"],
+#                     "match_type": item["match_type"],
+#                     "version": item["version"],
+#                 }
+#                 for item in state["job_matches"]
+#             ],
+#         }
+#     )
+#     # 提取Human输入后恢复的键值对
+#     if not isinstance(selection, dict):
+#         raise ValueError("恢复数据必须是键值对对象")
+#     # ! 用户取消 直接返回
+#     if selection.get("action") == "cancel":
+#         return {
+#         "selected_job": None,
+#         "talent_request": {},
+#         "query_plan": {},
+#         "clarifications": [],
+#         "errors": [],
+#         "status": "cancelled",
+#     }
+#
+#     if selection.get("action") != "select":
+#         raise ValueError("恢复数据必须包含 action=select 或 action=cancel")
+#     selected_code = selection.get("job_code")
+#     selected = next(
+#         (item for item in state["job_matches"] if item["job_code"] == selected_code),
+#         None,
+#     )
+#     if selected is None:
+#         raise ValueError("恢复数据中的 job_code 不在待确认岗位列表中")
+#     return {"selected_job": selected, "status": "job_confirmed"}
 
+# # 作业1(第3部分)：节点边还要改为条件边
+# builder.add_edge("confirm_job", "compile_selected_job")
+# def _route_after_confirmation(state):
+#     return (
+#         "compile_selected_job"
+#         if state["status"] == "job_confirmed"
+#         else END
+#     )
+#
+# builder.add_conditional_edges(
+#     "confirm_job",
+#     _route_after_confirmation,
+#     {
+#         "compile_selected_job": "compile_selected_job",
+#         END: END,
+#     },
+# )
+
+# 第2次LLM提取(也是通过传入model_request_interpreter()方法)：把 original_request、confirmed_job 和 job_description 组合给模型，再从已确认 JD 提取具体要求。
+# 注意输出 input_mode 被强制保留为 job_name：它标明最初的输入来源
+# 第二次 Draft 可以包含 JD 结构化检索(_lookup_jobs节点) 解析出的详细条件(和第1次不同点)
 def _compile_selected_job(request_interpreter: RequestInterpreter):
     def compile_selected_job(state: TalentRequestState) -> dict[str, Any]:
         draft = request_interpreter(state["request_text"], state["selected_job"])
@@ -195,7 +283,7 @@ def _build_plan(state: TalentRequestState) -> dict[str, Any]:
             "name": selected_job["name"],
             "version": selected_job["version"],
         }
-
+    # 构建 talent_request 业务语义对象
     talent_request = {
         "original_text": state["request_text"],
         "task_type": "evaluate_and_recommend",
@@ -207,6 +295,7 @@ def _build_plan(state: TalentRequestState) -> dict[str, Any]:
         ],
         "evaluation_preferences": draft.evaluation_preferences,
     }
+    # 构建 QueryPlan 执行协议对象(后续检索要用到)
     query_plan = QueryPlan(
         task_type=TaskType.FIND_TALENT,
         filters=draft.filters,
@@ -275,7 +364,9 @@ MODEL_SYSTEM_PROMPT = """你是人才评估任务编译器。输出 TalentReques
 含糊、缺失阈值或互相矛盾的条件写入 clarifications。租户和权限不得从用户文本提取。
 当输入中包含 confirmed_job 时，按照已确认岗位 JD 编译条件，并保留用户补充要求。"""
 
-
+# 对于第一次模型调用，产 Draft 而非最终计划
+# 这里能在TalentRequestDraft里的 RequestInputMode 写明判断用户input是 职位描述(无具体职位) 还是 具体职位
+# 以便 _interpret_input -> _route_input 路由到 按职位查找 还是 按职位描述(无具体职位) 链路
 def model_request_interpreter(request_text: str, selected_job: JobMatch | None = None) -> TalentRequestDraft:
     model = get_chat_model(temperature=0)
     if model is None:
@@ -292,6 +383,7 @@ def model_request_interpreter(request_text: str, selected_job: JobMatch | None =
     )
 
 
+# lookup_jobs节点的传入参数，找到具体符合的岗位内容。通过 TalentToolService 服务层调用
 def database_job_lookup(query: str, context: DecisionContext) -> list[JobMatch]:
     service = TalentToolService(session_factory=SessionLocal)
     tool_context = TalentToolContext(
