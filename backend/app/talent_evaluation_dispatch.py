@@ -26,17 +26,21 @@ class ScoreAnchor(BaseModel):
     description: str = Field(min_length=1, max_length=300)
 
 
-class EvaluationDimension(BaseModel):
-    name: str = Field(min_length=1, max_length=80)
-    definition: str = Field(min_length=1, max_length=500)
-    weight_percent: int = Field(ge=1, le=100)
-    evidence_requirements: list[str] = Field(min_length=1, max_length=8)
-    score_anchors: list[ScoreAnchor] = Field(min_length=3, max_length=3)
-    retrieval_hints: list[str] = Field(min_length=1, max_length=8)
-    source_requirement_ids: list[str] = Field(min_length=1, max_length=8)
+class EvaluationDimension(BaseModel): # 每一个评估维度的完整协议
+    name: str = Field(min_length=1, max_length=80) # 人类可以阅读的维度名称
+    # 例如： 1. "RAG项目落地能力"； 2. "Agent 评测与质量保障"； 3. "协作与交付能力"
 
+    definition: str = Field(min_length=1, max_length=500) # 解释“这个维度评估的边界是什么”
+    # 例如“RAG 项目落地能力”不能只写成“是否会 RAG”，更好的定义是：
+    # 候选人是否有将检索增强生成系统应用到真实业务场景，并完成数据、检索、生成、评测、上线或迭代闭环的可验证经验。
 
-class EvaluationDimensionPlan(BaseModel):
+    weight_percent: int = Field(ge=1, le=100) # 当前维度在未来总评分中的权重。当前约束为 1 到 100 的整数。List中所有维度之和为100，但需要后续
+    evidence_requirements: list[str] = Field(min_length=1, max_length=8) # 必须逐条寻找的证据要求。例如： - 是否真实参与过 RAG 项目 - 在项目中承担了哪些职责 - 是否有上线、质量指标或迭代结果
+    score_anchors: list[ScoreAnchor] = Field(min_length=3, max_length=3) # 评分锚点: 0-5分 0分完全没有证据相关：没有找到 RAG 项目事实； 3分部分证据相关：参与过项目，但职责和结果不清楚； 5分证据完全相关：有明确项目、职责、技术方案和上线结果
+    retrieval_hints: list[str] = Field(min_length=1, max_length=8) # 面向检索系统的关键词组合。例如："RAG" "知识库" "检索增强" "召回"
+    source_requirement_ids: list[str] = Field(min_length=1, max_length=8) # 标明这个维度来自哪条原始语义要求或偏好：S1 S2 preference:1 preference:2 这样后续可以回答：这个评估维度是用户提出的，还是模型自行增加的？
+
+class EvaluationDimensionPlan(BaseModel): # LLM输出的维度集合 最多6个维度
     dimensions: list[EvaluationDimension] = Field(min_length=1, max_length=6)
 
 
@@ -45,7 +49,8 @@ class DimensionValidationIssue(BaseModel):
     message: str
     dimension_numbers: list[int] = Field(default_factory=list)
 
-
+# 表示“一个候选人 的 一个评估维度”的完整评估任务。
+# 后续被 Send 分发到一个 Branch Worker，Branch Worker 再把这个维度下的多条 evidence_requirements 提交给线程池并行处理
 class AssessmentWorkItem(BaseModel):
     task_id: str
     candidate_id: str
@@ -75,7 +80,7 @@ class EvidenceCitationRef(BaseModel):
     chunk_id: str
     source_label: str = Field(min_length=1)
 
-
+# 每个维度下的单个证据要求 RequirementEvidence 对象
 class RequirementEvidence(BaseModel):
     requirement_id: str
     query: str
@@ -87,7 +92,7 @@ class RequirementEvidence(BaseModel):
     missing_information: list[str] = Field(default_factory=list)
     citations: list[EvidenceCitationRef] = Field(default_factory=list)
 
-
+# BranchEvidenceDraft 是一个 AssessmentWorkItem 分支执行完成后的结构化证据草稿
 class BranchEvidenceDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -102,14 +107,14 @@ class BranchEvidenceDraft(BaseModel):
     error_code: str | None = None
     error_message: str | None = None
 
-
+# LangGraph State 状态
 class TalentEvaluationDispatchState(TypedDict, total=False):
-    talent_request: dict[str, Any]
+    talent_request: dict[str, Any] # 输入的
     query_plan: dict[str, Any]
     dimensions: list[dict[str, Any]]
     candidate_ids: list[str]
     work_items: list[dict[str, Any]]
-    branch_results: Annotated[list[dict[str, Any]], operator.add]
+    branch_results: Annotated[list[dict[str, Any]], operator.add] # 每个维度分支的send()结果通过reducer的add方式添加
     validation_issues: list[dict[str, Any]]
     required_work_items: int
     work_item_limit: int
@@ -227,7 +232,7 @@ def build_branch_evidence_provider(
 
     return evidence_provider
 
-
+# 动态维度生成：从模型调用到结构化结果(generate_dimensions Node节点传入的动态多维度生成方法参数)
 def build_structured_dimension_generator(
     model_provider: ModelProvider,
 ) -> DimensionGenerator:
@@ -250,6 +255,7 @@ def build_structured_dimension_generator(
             "talent_request": talent_request,
             "query_plan": query_plan,
         }
+        # 根据System Prompt动态生成包含不同维度 EvaluationDimension 的 EvaluationDimensionPlan
         result = model.with_structured_output(EvaluationDimensionPlan).invoke(
             [
                 ("system", DIMENSION_GENERATOR_PROMPT),
@@ -268,7 +274,7 @@ def build_structured_dimension_generator(
 
     return generate
 
-
+# 将该维度的 retrieval_hints集合 和当前这一条 requirement 合并、去重，并截到 500 个字符。重点是：检索的目标不仅是宽泛的维度名称，而是具体的证据要求
 def _branch_query(dimension: EvaluationDimension, requirement: str) -> str:
     terms = list(dict.fromkeys([*dimension.retrieval_hints, requirement]))
     return " ".join(terms)[:500]
@@ -315,10 +321,12 @@ def _missing_requirement(
         missing_information=[requirement],
     )
 
-
+# 3层函数
+# 第一层：装配 (构建LangGraph运行时图时)
 def build_evidence_branch_worker(service: Any, executor: ToolExecutor) -> BranchWorker:
     """Prepare evaluation-ready evidence without an additional ReAct loop."""
 
+    # 第二层：处理一个候选人×维度 (每个 Send() 分支运行时调用该层)
     def branch_worker(
         work_item: AssessmentWorkItem,
         context: DecisionContext,
@@ -330,22 +338,25 @@ def build_evidence_branch_worker(service: Any, executor: ToolExecutor) -> Branch
             work_item.dimension_number,
             len(work_item.dimension.evidence_requirements),
         )
+        # 建立权限上下文
         tool_context = TalentToolContext(
             tenant_id=context.tenant_id,
             permission_scopes=tuple(context.permission_scopes),
             actor_id="evaluation-branch-worker",
             run_id=work_item.task_id,
         )
-        requirement_results: list[RequirementEvidence] = []
-        call_ids: list[str] = []
-        degraded = False
+        requirement_results: list[RequirementEvidence] = [] # 当前维度各条要求的证据
+        call_ids: list[str] = []                            # 工具调用 ID
+        degraded = False                                    # 是否发生降级
 
+        # 第三层：处理一条证据要求 (该分支内部检索时执行)
         def evaluate_requirement(
             index: int,
             requirement: str,
         ) -> tuple[RequirementEvidence, str | None, bool]:
-            requirement_id = f"{work_item.dimension_number}:{index}"
-            query = _branch_query(work_item.dimension, requirement)
+            # 第三层 第一步：构造稳定的要求编号与检索查询
+            requirement_id = f"{work_item.dimension_number}:{index}" # 拼接每个 维度 + 要求 作为唯一id。例如：维度编号为 2、当前是第 1 条证据要求，编号就是 2:1
+            query = _branch_query(work_item.dimension, requirement) # 将该维度的 retrieval_hints 和当前这一条 requirement 合并、去重
             logger.info(
                 "event=branch_requirement_started function=branch_worker "
                 "task_id=%s candidate_id=%s dimension_number=%s "
@@ -353,6 +364,7 @@ def build_evidence_branch_worker(service: Any, executor: ToolExecutor) -> Branch
                 work_item.task_id, work_item.candidate_id,
                 work_item.dimension_number, requirement_id, len(query),
             )
+            # 第三层 第二步：通过 ToolExecutor 调用"search_candidate_evidence"检索工具，而非绕过工具边界
             envelope = executor.execute(
                 "search_candidate_evidence",
                 lambda query=query: service.search_candidate_evidence(
@@ -369,6 +381,8 @@ def build_evidence_branch_worker(service: Any, executor: ToolExecutor) -> Branch
             meta = envelope.get("meta") or {}
             call_id = meta.get("call_id")
             normalized_call_id = call_id if isinstance(call_id, str) and call_id else None
+
+            # 第三层 第三步：检索失败时，不编造事实
             if not envelope.get("ok"):
                 error = envelope.get("error") or {}
                 logger.error(
@@ -391,6 +405,7 @@ def build_evidence_branch_worker(service: Any, executor: ToolExecutor) -> Branch
                 )
 
             data = envelope.get("data") or {}
+            # 第三层 第四步：从结果里找当前候选人的 Evidence Pack
             pack = next(
                 (
                     item
@@ -422,6 +437,8 @@ def build_evidence_branch_worker(service: Any, executor: ToolExecutor) -> Branch
                     normalized_call_id,
                     True,
                 )
+
+            # 第三层 第五步：把原始证据转成统一协议(后续暂时不能走到，基于15课提交 选错了？)
             result = RequirementEvidence.model_validate(
                 {
                     **raw_requirement,
@@ -442,8 +459,11 @@ def build_evidence_branch_worker(service: Any, executor: ToolExecutor) -> Branch
                 result.status, result.reason, result.extraction_status,
                 len(result.facts), len(result.citations),
             )
+
+            # 第三层 第六步：返回三个值，而不是只返回证据
             return result, normalized_call_id, bool(meta.get("degraded"))
 
+        # !这里对应work_item对象里对应单个维度的多条requirements要求
         indexed_requirements = list(
             enumerate(work_item.dimension.evidence_requirements, start=1)
         )
@@ -451,10 +471,16 @@ def build_evidence_branch_worker(service: Any, executor: ToolExecutor) -> Branch
             max_workers=len(indexed_requirements),
             thread_name_prefix="evaluation-requirement",
         ) as pool:
+            # 线程池会对每个requirement for循环类似以下调用(方法，参数1，参数2)，并返回 Future：
+            # evaluate_requirement(1, "是否承担过 RAG 项目核心开发")
+            # evaluate_requirement(2, "是否有上线后的效果指标")
             futures = [
                 pool.submit(evaluate_requirement, index, requirement)
                 for index, requirement in indexed_requirements
             ]
+
+            # 每个requirement要求对应的调用 当前evaluation_requirement()方法
+            # 从 前面 线程池submit返回 的 Future 集合中取得result
             outcomes = [future.result() for future in futures]
 
         for result, call_id, requirement_degraded in outcomes:
@@ -463,6 +489,7 @@ def build_evidence_branch_worker(service: Any, executor: ToolExecutor) -> Branch
                 call_ids.append(call_id)
             degraded = degraded or requirement_degraded
 
+        # 第二层 branch_worker()方法最终返回的 每个维度的 证据草稿对象
         branch_result = BranchEvidenceDraft(
             task_id=work_item.task_id,
             candidate_id=work_item.candidate_id,
@@ -551,9 +578,10 @@ def _receive_input(
         "errors": [],
     }
 
-
+# Node 通过传入的dimension_generator 动态生成多维度Plan对象
 def _generate_dimensions(dimension_generator: DimensionGenerator):
     def generate_dimensions(state: TalentEvaluationDispatchState) -> dict[str, Any]:
+        # 具体这里调用传入的 dimension_generator 动态生成多维度Plan对象(内部是List)
         plan = dimension_generator(
             state["talent_request"],
             state["query_plan"],
@@ -570,9 +598,10 @@ def _generate_dimensions(dimension_generator: DimensionGenerator):
 
     return generate_dimensions
 
-
+# Node 校验多维度Plan本身的合法性
 def _validate_dimensions(state: TalentEvaluationDispatchState) -> dict[str, Any]:
     plan = EvaluationDimensionPlan(dimensions=state["dimensions"])
+    # 目前仅判断不同维度权重之和是否为100
     issues = validate_dimension_plan(plan)
     logger.info(
         "event=graph_node_completed function=_validate_dimensions "
@@ -592,7 +621,7 @@ def _route_dimension_validation(
         return "dimension_invalid"
     return "retrieve_candidates"
 
-
+ # Node 通过传入的Sevice层 candidate_provider 函数拿到对应候选人ids
 def _retrieve_candidates(candidate_provider: CandidateProvider):
     def retrieve_candidates(
         state: TalentEvaluationDispatchState,
@@ -611,13 +640,13 @@ def _retrieve_candidates(candidate_provider: CandidateProvider):
 
     return retrieve_candidates
 
-
+# Node 任务矩阵的核心：根据维度 * 候选人列表 得到AssessmentWorkItem 对象列表
 def _prepare_work_items(max_work_items: int):
     def prepare_work_items(state: TalentEvaluationDispatchState) -> dict[str, Any]:
         dimensions = [
             EvaluationDimension.model_validate(item) for item in state["dimensions"]
         ]
-        required_work_items = len(state["candidate_ids"]) * len(dimensions)
+        required_work_items = len(state["candidate_ids"]) * len(dimensions) # 维度 * 候选人
         if required_work_items > max_work_items:
             logger.error(
                 "event=graph_capacity_exceeded function=prepare_work_items "
@@ -630,9 +659,9 @@ def _prepare_work_items(max_work_items: int):
                 "work_items": [],
                 "required_work_items": required_work_items,
                 "work_item_limit": max_work_items,
-                "status": "capacity_exceeded",
+                "status": "capacity_exceeded", # 容量超额，维度 * 候选人列表
             }
-        numbered_dimensions = list(enumerate(dimensions, start=1))
+        numbered_dimensions = list(enumerate(dimensions, start=1)) # 从 1 开始对应每个维度
         work_items = [
             AssessmentWorkItem(
                 task_id=f"{candidate_id}:{dimension_number}",
@@ -640,7 +669,7 @@ def _prepare_work_items(max_work_items: int):
                 dimension_number=dimension_number,
                 dimension=dimension,
             ).model_dump(mode="json")
-            for candidate_id in state["candidate_ids"]
+            for candidate_id in state["candidate_ids"] # !双层for循环 拿到[候选人数 × 维度数量]个 AssessmentWorkItem
             for dimension_number, dimension in numbered_dimensions
         ]
         logger.info(
@@ -654,12 +683,12 @@ def _prepare_work_items(max_work_items: int):
             "work_items": work_items,
             "required_work_items": required_work_items,
             "work_item_limit": max_work_items,
-            "status": "work_items_ready" if work_items else "no_candidates",
+            "status": "work_items_ready" if work_items else "no_candidates", # 容量符合 -> 到下一节点
         }
 
     return prepare_work_items
 
-
+# 通过前面 维度 * 候选人列表 work_items 循环send()
 def build_work_item_sends(
     work_items: list[dict[str, Any]],
 ) -> list[Send]:
@@ -668,20 +697,27 @@ def build_work_item_sends(
         "work_item_count=%s task_ids=%s",
         len(work_items), [item["task_id"] for item in work_items],
     )
+    # 这里是返回一个Send的集合，而不是分别穿行执行Send()方法...
+    # 例如：[
+    #     Send("run_assessment_branch", {"work_item": C001_维度1}),
+    #     Send("run_assessment_branch", {"work_item": C001_维度2}),
+    #     Send("run_assessment_branch", {"work_item": C002_维度1}),
+    #     Send("run_assessment_branch", {"work_item": C002_维度2}),
+    # ]
     return [
         Send("run_assessment_branch", {"work_item": item})
         for item in work_items
     ]
 
-
+# 判断status 对应前面 维度 * 候选人列表 生成work_items 是否符合要求
 def _dispatch_work_items(state: TalentEvaluationDispatchState):
     if state.get("status") == "capacity_exceeded":
-        return "capacity_exceeded"
+        return "capacity_exceeded" # 维度 * 候选人列表 容量限制超额
     if not state.get("work_items"):
-        return "no_candidates"
-    return build_work_item_sends(state["work_items"])
+        return "no_candidates" # 无候选人
+    return build_work_item_sends(state["work_items"]) # 正常流程
 
-
+# Node 前面 Work_Items 集合每个Item 进来并行到分支分别执行
 def _run_assessment_branch(branch_worker: BranchWorker):
     def run_assessment_branch(
         state: dict[str, Any],
@@ -695,6 +731,7 @@ def _run_assessment_branch(branch_worker: BranchWorker):
             work_item.dimension_number,
         )
         try:
+            # 每个 WorkItem 分别执行
             result = branch_worker(work_item, runtime.context)
         except TimeoutError as exc:
             logger.error(
@@ -743,7 +780,7 @@ def _run_assessment_branch(branch_worker: BranchWorker):
             "requirement_count=%s",
             work_item.task_id, result.execution_status, len(result.requirements),
         )
-        return {"branch_results": [result.model_dump(mode="json")]}
+        return {"branch_results": [result.model_dump(mode="json")]} # 每个维度分支的send()结果会通过reducer的add方式添加
 
     return run_assessment_branch
 
@@ -765,7 +802,7 @@ def _finalize(state: TalentEvaluationDispatchState) -> dict[str, Any]:
     )
     return {"status": status}
 
-
+ # Node 维度校验非法直接 -> END
 def _dimension_invalid(state: TalentEvaluationDispatchState) -> dict[str, Any]:
     return {
         "status": "dimension_invalid",
@@ -788,7 +825,7 @@ def _capacity_exceeded(state: TalentEvaluationDispatchState) -> dict[str, Any]:
 
 def build_talent_evaluation_dispatch_graph(
     *,
-    dimension_generator: DimensionGenerator,
+    dimension_generator: DimensionGenerator, # 传入前面LLM动态多维度生成的函数
     candidate_provider: CandidateProvider,
     branch_worker: BranchWorker,
     max_work_items: int = 24,

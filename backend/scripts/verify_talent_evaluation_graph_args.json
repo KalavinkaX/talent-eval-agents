@@ -1,0 +1,39 @@
+
+{
+  "talent_request": {
+    "original_text": "筛选上海且具备 RAG 落地与 Agent 评测经验的人才，协作交付经验优先",
+    "source": "detailed_requirement",
+    "hard_conditions": [
+      {
+        "field": "region",
+        "operator": "eq",
+        "value": "上海"
+      }
+    ],
+    "semantic_conditions": [
+      {
+        "requirement_id": "S1",
+        "query": "RAG 项目落地经验",
+        "required": true
+      },
+      {
+        "requirement_id": "S2",
+        "query": "Agent 评测经验",
+        "required": true
+      }
+    ],
+    "evaluation_preferences": [
+      "协作与交付经验优先"
+    ]
+  },
+  "query_plan": {
+    "task_type": "find_talent",
+    "filters": [
+      {
+        "field": "region",
+        "operator": "eq",
+        "value": "上海"
+      }
+    ]
+  }
+}

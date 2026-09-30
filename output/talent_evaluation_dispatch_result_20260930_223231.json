@@ -1,0 +1,152 @@
+{
+  "talent_request": {
+    "original_text": "筛选上海且具备 RAG 落地与 Agent 评测经验的人才，协作交付经验优先",
+    "source": "detailed_requirement",
+    "hard_conditions": [
+      {
+        "field": "region",
+        "operator": "eq",
+        "value": "上海"
+      }
+    ],
+    "semantic_conditions": [
+      {
+        "requirement_id": "S1",
+        "query": "RAG 项目落地经验",
+        "required": true
+      },
+      {
+        "requirement_id": "S2",
+        "query": "Agent 评测经验",
+        "required": true
+      }
+    ],
+    "evaluation_preferences": [
+      "协作与交付经验优先"
+    ]
+  },
+  "query_plan": {
+    "task_type": "find_talent",
+    "filters": [
+      {
+        "field": "region",
+        "operator": "eq",
+        "value": "上海"
+      }
+    ]
+  },
+  "dimensions": [
+    {
+      "name": "RAG 落地实证经验",
+      "definition": "候选人是否具备 RAG（检索增强生成）技术在真实业务场景中完成端到端落地的实证经验，包括但不限于需求分析、架构设计、数据接入、检索优化、LLM 调用集成、效果评估与上线迭代。",
+      "weight_percent": 40,
+      "evidence_requirements": [
+        "需提供可验证的项目名称、时间范围、角色、RAG 关键技术动作及交付成果（如上线系统、SOP 文档、AB 测试报告等）"
+      ],
+      "score_anchors": [
+        {
+          "score": 0,
+          "description": "0分：无任何 RAG 相关实践；未参与或仅学习/实验性质"
+        },
+        {
+          "score": 3,
+          "description": "3分：参与 RAG 项目但非主导，有部分模块贡献（如提示工程、数据清洗），无完整交付证据"
+        },
+        {
+          "score": 5,
+          "description": "5分：独立或主导完成至少1个 RAG 项目从需求到上线的全过程，并提供可交叉验证的交付物（如系统截图、日志片段、结项文档）"
+        }
+      ],
+      "retrieval_hints": [
+        "RAG",
+        "检索增强生成",
+        "上线",
+        "部署",
+        "POC",
+        "生产环境",
+        "知识库问答",
+        "向量检索"
+      ],
+      "source_requirement_ids": [
+        "S1"
+      ]
+    },
+    {
+      "name": "Agent 评测实证经验",
+      "definition": "候选人是否具备面向 AI Agent 的系统性评测实践经验，涵盖评测目标设定、指标设计（如任务完成率、工具调用准确率、推理链完整性）、测试集构建、自动化评测框架搭建或人工评估组织。",
+      "weight_percent": 40,
+      "evidence_requirements": [
+        "需提供具体 Agent 类型（如 Tool-Calling Agent、Reasoning Agent）、评测方法、使用工具/平台及量化结果"
+      ],
+      "score_anchors": [
+        {
+          "score": 0,
+          "description": "0分：无 Agent 评测经历；仅使用现成模型API，未设计或执行评测流程"
+        },
+        {
+          "score": 3,
+          "description": "3分：参与 Agent 评测环节（如标注、跑测），但未定义指标或分析结果，无方法论沉淀"
+        },
+        {
+          "score": 5,
+          "description": "5分：主导或深度参与至少1个 Agent 项目的评测方案设计与执行，输出可复现的评测报告/代码/指标看板，并明确关联业务改进点"
+        }
+      ],
+      "retrieval_hints": [
+        "Agent 评测",
+        "AI Agent 评估",
+        "tool calling accuracy",
+        "task success rate",
+        "evaluation framework",
+        "评测指标",
+        "人工评估"
+      ],
+      "source_requirement_ids": [
+        "S2"
+      ]
+    },
+    {
+      "name": "AI 项目协作交付能力",
+      "definition": "候选人是否在跨职能团队（如算法、产品、工程、测试）中承担协作角色并成功交付 AI 相关项目，体现需求对齐、进度协同、风险共担与成果闭环能力。",
+      "weight_percent": 20,
+      "evidence_requirements": [
+        "需提供协作项目名称、合作方角色、关键协作事件（如联合评审、联调排障、交付验收）及可佐证的交付物（会议纪要、PR 记录、验收签字页等）"
+      ],
+      "score_anchors": [
+        {
+          "score": 0,
+          "description": "0分：无跨角色协作经验；工作完全独立，无交付物归档或客户确认痕迹"
+        },
+        {
+          "score": 3,
+          "description": "3分：参与过协作项目，有基础沟通记录（如群聊截图），但缺乏过程留痕或成果闭环证明"
+        },
+        {
+          "score": 5,
+          "description": "5分：在至少1个 AI 项目中作为核心协作方推动关键节点交付，提供三方可验证的过程与结果证据（如邮件+会议纪要+上线通知）"
+        }
+      ],
+      "retrieval_hints": [
+        "跨团队协作",
+        "联合交付",
+        "项目验收",
+        "PR",
+        "code review",
+        "需求评审",
+        "联调",
+        "Sprint 回顾"
+      ],
+      "source_requirement_ids": [
+        "preference:1"
+      ]
+    }
+  ],
+  "candidate_ids": [],
+  "work_items": [],
+  "branch_results": [],
+  "validation_issues": [],
+  "required_work_items": 0,
+  "work_item_limit": 24,
+  "status": "no_candidates",
+  "errors": []
+}

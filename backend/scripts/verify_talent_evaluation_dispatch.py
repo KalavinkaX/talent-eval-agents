@@ -6,7 +6,7 @@ import logging
 
 from app.talent_decision_graph import DecisionContext
 from app.talent_evaluation_runtime import graph
-from utils.file_utils import dump_json
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,16 @@ def main() -> None:
 
     import datetime
     current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    dump_json(result, f"output/talent_evaluation_dispatch_result_{current_time}.json", ensure_ascii=False, indent=2)
+    output_path = (
+            Path(__file__).resolve().parents[2]
+            / "output"
+            / f"talent_evaluation_dispatch_result_{current_time}.json"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(result, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
     dimensions = [
         {
             "dimension_number": dimension_number,
