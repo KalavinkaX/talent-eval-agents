@@ -31,6 +31,7 @@ RequestStatus = Literal[
     "plan_revised",
     "request_revised",
     "cancelled",
+    "revision_limit_reached" # 作业1：新增达到最大修订的status
 ]
 
 
@@ -84,9 +85,9 @@ class TalentRequestState(TypedDict, total=False):
     selected_job: JobMatch | None
     talent_request: dict[str, Any]
     query_plan: dict[str, Any]
-    candidate_ids: list[str]
-    condition_revisions: Annotated[list[dict[str, Any]], add]
-    plan_version: int
+    candidate_ids: list[str] # 候选人 IDs
+    condition_revisions: Annotated[list[dict[str, Any]], add] # 用户的完整修订历史(add reducer 可追加)
+    plan_version: int # 用户当前修订代数
     clarifications: list[dict[str, str]]
     status: RequestStatus
     errors: list[str]
@@ -182,6 +183,7 @@ def _confirm_job(state: TalentRequestState) -> dict[str, Any]:
     )
     if not isinstance(selection, dict):
         raise ValueError("恢复数据必须是 JSON 对象")
+    # 作业的另外 select 或 cancel 状态选择 实现
     if selection.get("action") == "cancel":
         return {"status": "cancelled"}
     if selection.get("action") != "select":
@@ -193,7 +195,7 @@ def _confirm_job(state: TalentRequestState) -> dict[str, Any]:
     )
     if selected is None:
         raise ValueError("恢复数据中的 job_code 不在待确认岗位列表中")
-    return {"selected_job": selected, "status": "job_confirmed"}
+    return {"selected_job": selected, "status": "job_confirmed"} # 正常选择后 status 设置为下一个节点
 
 
 def _route_job_confirmation(state: TalentRequestState) -> str:
@@ -238,7 +240,7 @@ def _build_plan(state: TalentRequestState) -> dict[str, Any]:
         filters=draft.filters,
         semantic_requirements=draft.semantic_requirements,
         preferences=draft.evaluation_preferences,
-        clarifications=draft.clarifications,
+        clarifications=draft.clarifications, # 构建plan的时候就会确定是否需要走到后续的澄清节点
     )
     status: RequestStatus = "plan_ready" if query_plan.executable else "clarification_required"
     return {
@@ -268,7 +270,7 @@ def _no_job_match(state: TalentRequestState) -> dict[str, Any]:
 
 
 def _route_after_plan(state: TalentRequestState) -> str:
-    if state["status"] == "clarification_required":
+    if state["status"] == "clarification_required":  #
         return "resolve_requirements"
     return "filter_candidates"
 
@@ -291,17 +293,26 @@ def _await_decision(payload: dict[str, Any], parse: Callable[[Any], dict[str, An
     校验失败时不抛出异常，而是携带 resume_error 重新 interrupt，
     让 Thread 停留在暂停点等待下一次提交，避免节点失败导致线程卡死
     """
-    decision = interrupt(payload)
+    decision = interrupt(payload)                                       # A：首次暂停(打断停在这)
+    # 打断后恢复：
+    # 第一次中断后恢复会从当前"_resolve_requirements"节点第一行开始重新执行
+    # 然后打断后用户输入的内容 赋值到上面的 decision 参数(打断的作用我可以粗略的理解最主要是用户输入修改的内容返回赋值到decision参数上)
+
     while True:
         try:
-            return parse(decision)
+            return parse(decision)                                      # B：校验，成功就退出函数
         except ValueError as exc:
-            decision = interrupt({**payload, "resume_error": str(exc)})
+            # parse 失败时不让节点终止；
+            # 重新 interrupt，附加 resume_error
+            decision = interrupt({**payload, "resume_error": str(exc)}) # C：校验失败，再次暂停
 
 
 def _require_interaction(decision: Any, expected_id: str) -> dict[str, Any]:
+    # 防止传入 decision(交互定义的payload) 是非对象恢复值
     if not isinstance(decision, dict):
         raise ValueError("恢复数据必须是 JSON 对象")
+
+    # 确保打断点id和恢复点id相同
     if decision.get("interaction_id") != expected_id:
         raise ValueError(f"恢复数据与当前暂停点不匹配，期望 interaction_id={expected_id}")
     return decision
@@ -310,9 +321,12 @@ def _require_interaction(decision: Any, expected_id: str) -> dict[str, Any]:
 def _filter_candidates_node(candidate_filter: CandidateFilter):
     def filter_candidates(state: TalentRequestState, runtime: Runtime[DecisionContext]) -> dict[str, Any]:
         plan = QueryPlan.model_validate(state["query_plan"])
+        # 检索候选人ids列表是否存在
         candidate_ids = candidate_filter(plan.filters, runtime.context)
         if candidate_ids:
+            # 候选人存在则返回 "status": "candidates_ready" 正常走向下一个节点
             return {"candidate_ids": candidate_ids, "status": "candidates_ready"}
+        # 候选人不存在，则返回 "status": "candidates_empty"
         return {"candidate_ids": [], "status": "candidates_empty"}
 
     return filter_candidates
@@ -338,7 +352,7 @@ def _diagnose_filters(
         )
     return diagnostics
 
-
+# Node Human In The Loop (lesson-17重点关键节点)
 def _resolve_requirements():
     def resolve_requirements(
         state: TalentRequestState,
@@ -348,6 +362,7 @@ def _resolve_requirements():
         interaction_id = f"rr-v{plan_version}"
         reason_code = "plan_blocked" if state["status"] == "clarification_required" else "empty_candidates"
         filters = state.get("draft", {}).get("filters", [])
+        # 两种需要 Human In The Loop 的情况原因
         if reason_code == "plan_blocked":
             blocking_reason = "当前要求存在歧义或冲突，无法生成可执行查询计划"
         else:
@@ -357,6 +372,7 @@ def _resolve_requirements():
             blocking_reason = f"使用以下结构化条件筛选后未命中候选人：{rendered}"
         selected_job = state.get("selected_job")
         if selected_job is not None:
+            # 如果已经选中岗位
             editable_request = selected_job["content"]
             request_source = "job_profile"
             selected_job_source: dict[str, Any] | None = {
@@ -368,6 +384,7 @@ def _resolve_requirements():
             editable_request = state["request_text"]
             request_source = "user_request"
             selected_job_source = None
+        # payload 是人机协作接口契约
         payload = {
             "type": "requirement_revision",
             "interaction_id": interaction_id,
@@ -395,7 +412,7 @@ def _resolve_requirements():
                 raise ValueError("revise 动作必须携带非空 revision_text")
             return {"action": "revise", "revision_text": revision_text.strip()}
 
-        parsed = _await_decision(payload, parse)
+        parsed = _await_decision(payload, parse) # 返回值为 parse() 返回值
         if parsed["action"] == "cancel":
             return {"status": "cancelled"}
 
@@ -413,7 +430,7 @@ def _resolve_requirements():
             "job_matches": [],
             "candidate_ids": [],
             "condition_revisions": [revision],
-            "plan_version": plan_version + 1,
+            "plan_version": plan_version + 1, # 接受一次人工修订后 version 自增
             "status": "request_revised",
         }
 
@@ -453,9 +470,22 @@ def _apply_relaxations(
             raise ValueError(f"不支持的放宽操作：{op}")
     return updated, changes
 
+MAX_REQUIREMENT_REVISIONS = 3 # 作业1：HumanInTheLoop 最大修订次数
 
 def _resolve_conditions(state: TalentRequestState) -> dict[str, Any]:
     plan_version = state.get("plan_version", 0)
+    # 作业1 ： 加个对state里condition_revisions参数的长度校验，因为是add的reducer
+    revision_count = len(state.get("condition_revisions", []))
+    if revision_count >= MAX_REQUIREMENT_REVISIONS:
+        return {
+            "candidate_ids": [],
+            "clarifications": state.get("clarifications", []),
+            "errors": [
+                f"已达到最大要求修订次数 {MAX_REQUIREMENT_REVISIONS}，请重新发起任务或转人工"
+            ],
+            "status": "revision_limit_reached",
+        }
+
     interaction_id = f"cc-v{plan_version}"
     draft = dict(state["draft"])
     payload = {
@@ -626,9 +656,11 @@ def build_talent_request_graph(
     builder.add_edge("no_job_match", END)
 
     if candidate_filter is None:
+        # 若为None，则为14课原路径
         # 第 14 课行为：编译出 QueryPlan 即结束，候选人检索与澄清节点不挂载
         builder.add_edge("build_plan", END)
     else:
+        # 本节17课路径，
         builder.add_node("filter_candidates", _filter_candidates_node(candidate_filter))
         builder.add_node("resolve_requirements", _resolve_requirements())
         builder.add_conditional_edges(
@@ -638,7 +670,7 @@ def build_talent_request_graph(
         )
         builder.add_conditional_edges(
             "filter_candidates",
-            _route_candidates,
+            _route_candidates, # candidates 候选人在DB为空则走 resolve_requirements 节点
             {"resolve_requirements": "resolve_requirements", END: END},
         )
         builder.add_conditional_edges(

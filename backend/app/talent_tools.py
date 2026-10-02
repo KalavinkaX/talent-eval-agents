@@ -268,9 +268,11 @@ class TalentToolService:
         for row in rows:
             normalized_name = "".join(row.name.lower().split())
             if normalized_query == normalized_name:
+                # 只有job名字和DB查出来的名字完全相同才是"exact"
                 match_type = "exact"
                 score = 1.0
             elif normalized_query in normalized_name or normalized_name in normalized_query:
+                # 包含关系不是"exact"
                 match_type = "contains"
                 score = 1.0
             else:
